@@ -21,6 +21,9 @@ The advantages of using SEKM over PERC Local Key Management (LKM) are:
     SEKM supports the industry standard OASIS KMIP protocol thus enabling use of any external third party
     KMIP server.
 
+For more information:
+https://dl.dell.com/content/manual6772278-openmanage-secure-enterprise-key-manager-on-poweredge-servers.pdf
+
 ## Redfish Overview
 
 There are various Out-of-Band (OOB) systems management standards available in the industry today. However, there is no
