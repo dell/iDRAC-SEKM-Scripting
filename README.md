@@ -1,6 +1,6 @@
 # iDRAC-SEKM-Scripting
 
-Dell Secure Enterprise Key manager (SEKM) python scripts for configuring complete SEKM solution for iDRAC. 
+Dell Secure Enterprise Key manager (SEKM) python scripts for configuring complete iDRAC SEKM solution. 
 
 ## SEKM Overview
 
