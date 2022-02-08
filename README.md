@@ -96,6 +96,8 @@ perform the following actions:
 
 Configure and enable end to end SEKM solution using Thales k170v server - enable_sekm_solution_k170v.py:
 
+Note: this script currently only supports PERC controller solution
+
 * Reads required SEKM input values from ini file
 * Creates iDRAC user on Thales server and adds user to Key Users group
 * Configures and generates CSR on iDRAC, gets signed cert back from Thales server
