@@ -1,4 +1,4 @@
-""" Python script using Redfish API with OEM extension to enable controller encryption
+""" Python script using Redfish API with OEM extension to enable SEKM/iLKM solutions
 
 Copyright (c) 2022, Dell, Inc.
 
@@ -74,6 +74,14 @@ SEKMCERT_SUBJECTALTNAME = "SubjectAltName"
 SEKMCERT_USERID = "UserId"
 SEKM_IPADDRESSINCERTIFICATE = "IPAddressInCertificate"
 SEKM_KMSKEYPURGEPOLICY = "KMSKeyPurgePolicy"
+SEKM_AUTOSECURE = "SEKM.1.AutoSecure"
+SEKM_ILKMSTATUS = "SEKM.1.iLKMStatus"
+SEKM_SETSTATE = "SEKM.1.SetState"
+SEKM_SEKMSTATUS = "SEKM.1.SEKMStatus"
+ENABLE = "Enable"
+ENABLED = "Enabled"
+DISABLE = "Disable"
+DISABLED = "Disabled"
 
 
 def generate_template_ini():
@@ -81,7 +89,7 @@ def generate_template_ini():
     Create an ini file in the current working directory with the required params in a template
     :return: str, full path to the generated file
     """
-    filename = 'enable_sekm_solution_k170v_template.ini'
+    filename = 'idrac_storage_security_management-template.ini'
     template = configparser.ConfigParser()
     template.add_section(INI_KMS_SECTION)
     template.set(INI_KMS_SECTION, KMIP_SERVERADDRESS, "<KMS IP ADDRESS>")
@@ -183,15 +191,37 @@ def request(url, request_type="GET", payload=None, auth=None, headers=None, succ
         sys.exit(1)
 
 
+def redfish_get_value_for_property(uri, username, password, property_name):
+    """
+    Generic get on a value given a property name and uri to interface implementing Redfish (or any restful API that uses
+    a JSON payload/entity model over HTTP)
+    :param uri: full uri to collection endpoint
+    :param username:
+    :param password:
+    :param property_name: the property to get the value for
+    :return: str, the value for the property
+    """
+    parent_name = uri.rsplit('/', 1)[-1]
+    attribute_uri = f'{uri}?$select={property_name}'
+    response = request(attribute_uri, 'GET', headers={'content-type': 'application/json'},
+                       case_info=f'getting a value for {property_name}', auth=(username, password))
+    data = response.json()
+    return data.get(parent_name).get(property_name, {})
+
+
 class ThalesServerFacade:
     """
     KMS server class
     """
 
-    def __init__(self):
-        self.kms_url = f"https://{config.get(INI_KMS_SECTION, KMIP_SERVERADDRESS)}/api/v1"
-        self.kms_user = config.get(INI_KMS_SECTION, KMIP_SERVERUSERNAME)
-        self.kms_pass = config.get(INI_KMS_SECTION, KMIP_SERVERPASSWORD)
+    def __init__(self, config=None):
+        if not config:
+            self.config = object
+        else:
+            self.config = config
+        self.kms_url = f"https://{self.config.kmip_attributes.get(KMIP_SERVERADDRESS)}/api/v1"
+        self.kms_user = self.config.kmip_attributes.get(KMIP_SERVERUSERNAME)
+        self.kms_pass = self.config.kmip_attributes.get(KMIP_SERVERPASSWORD)
         self.ca_certificate_path = os.path.join(CWD, "local_ca.pem")
         self.signed_sekm_cert = os.path.join(CWD, "signed_sekm_cert.pem")
         self.ca_id = None
@@ -199,7 +229,7 @@ class ThalesServerFacade:
         self.server_info = None
         self.kms_data = None
 
-    def get_token(self):
+    def __get_token(self):
         """"
         Get a valid bearer token.
         """
@@ -231,7 +261,7 @@ class ThalesServerFacade:
         if not success_codes:
             success_codes = []
         if not self.bearer_token:
-            self.bearer_token = self.get_token()
+            self.bearer_token = self.__get_token()
         headers = {"Authorization": f"Bearer {self.bearer_token}"}
         return request(f'{self.kms_url}/{path.lstrip("/")}', request_type=request_type, payload=payload,
                        headers=headers, success_codes=success_codes, case_info=case_info, stream=stream)
@@ -266,10 +296,10 @@ class ThalesServerFacade:
 
             user_attributes = {
                 "app_metadata": {},
-                "email": config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_EMAILADDRESS),
-                "name": config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_COMMONNAME),
-                "username": config.get(INI_IDRAC_KMS_SECTION, KMS_IDRACUSERNAME),
-                "password": config.get(INI_IDRAC_KMS_SECTION, KMS_IDRACPASSWORD),
+                "email": self.config.sekmcert_attributes.get(f'SEKMCert.1.{SEKMCERT_EMAILADDRESS}'),
+                "name": self.config.sekmcert_attributes.get(f'SEKMCert.1.{SEKMCERT_COMMONNAME}'),
+                "username": self.config.kms_attributes.get(f'KMS.1.{KMS_IDRACUSERNAME}'),
+                "password": self.config.kms_attributes.get(f'KMS.1.{KMS_IDRACPASSWORD}'),
                 "user_metadata": {}
             }
 
@@ -367,7 +397,11 @@ class IdracFacade:
     Wrapper class for the iDRAC
     """
 
-    def __init__(self):
+    def __init__(self, config=None):
+        if not config:
+            self.config = object
+        else:
+            self.config = config
         self.idrac_url = f'https://{idrac_ip}'
         self.username = idrac_username
         self.password = idrac_password
@@ -378,66 +412,25 @@ class IdracFacade:
         self.system_url = f'{self.idrac_url}/redfish/v1/Systems/System.Embedded.1'
         self.lc_attributes_url = f'{self.idrac_url}/redfish/v1/Managers/LifecycleController.Embedded.1/Attributes'
         self.system_attributes_url = f'{self.idrac_url}/redfish/v1/Managers/System.Embedded.1/Attributes'
-        self.sekmcert_attributes = {
-            f'SEKMCert.1.{SEKMCERT_COMMONNAME}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_COMMONNAME),
-            f'SEKMCert.1.{SEKMCERT_COUNTRYCODE}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_COUNTRYCODE),
-            f'SEKMCert.1.{SEKMCERT_EMAILADDRESS}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_EMAILADDRESS),
-            f'SEKMCert.1.{SEKMCERT_LOCALITYNAME}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_LOCALITYNAME),
-            f'SEKMCert.1.{SEKMCERT_ORGANIZATIONNAME}': config.get(INI_IDRAC_SEKMCERT_SECTION,
-                                                                  SEKMCERT_ORGANIZATIONNAME),
-            f'SEKMCert.1.{SEKMCERT_ORGANIZATIONUNIT}': config.get(INI_IDRAC_SEKMCERT_SECTION,
-                                                                  SEKMCERT_ORGANIZATIONUNIT),
-            f'SEKMCert.1.{SEKMCERT_STATENAME}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_STATENAME),
-            f'SEKMCert.1.{SEKMCERT_SUBJECTALTNAME}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_SUBJECTALTNAME),
-            f'SEKMCert.1.{SEKMCERT_USERID}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_USERID)
-        }
+        self.idrac_card_service_url = f'{self.idrac_manager_url}/Oem/Dell/DelliDRACCardService'
 
-        self.kms_attributes = {
-            f'KMS.1.{KMS_IDRACUSERNAME}': config.get(INI_IDRAC_KMS_SECTION, KMS_IDRACUSERNAME),
-            f'KMS.1.{KMS_IDRACPASSWORD}': config.get(INI_IDRAC_KMS_SECTION, KMS_IDRACPASSWORD),
-            f'KMS.1.{KMS_KMIPPORTNUMBER}': config.get(INI_IDRAC_KMS_SECTION, KMS_KMIPPORTNUMBER),
-            f'KMS.1.{KMS_PRIMARYSERVERADDRESS}': config.get(INI_IDRAC_KMS_SECTION, KMS_PRIMARYSERVERADDRESS),
-            f'KMS.1.{KMS_REDUNDANTKMIPPORTNUMBER}': config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTKMIPPORTNUMBER),
-            f'KMS.1.{KMS_TIMEOUT}': config.get(INI_IDRAC_KMS_SECTION, KMS_TIMEOUT)}
-        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS1):
-            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS1}': config.get(INI_IDRAC_KMS_SECTION,
-                                                                                           KMS_REDUNDANTSERVERADDRESS1)})
-        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS2):
-            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS2}': config.get(INI_IDRAC_KMS_SECTION,
-                                                                                           KMS_REDUNDANTSERVERADDRESS2)})
-        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS3):
-            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS3}': config.get(INI_IDRAC_KMS_SECTION,
-                                                                                           KMS_REDUNDANTSERVERADDRESS3)})
-        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS4):
-            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS4}': config.get(INI_IDRAC_KMS_SECTION,
-                                                                                           KMS_REDUNDANTSERVERADDRESS4)})
-        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS5):
-            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS5}': config.get(INI_IDRAC_KMS_SECTION,
-                                                                                           KMS_REDUNDANTSERVERADDRESS5)})
-        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS6):
-            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS6}': config.get(INI_IDRAC_KMS_SECTION,
-                                                                                           KMS_REDUNDANTSERVERADDRESS6)})
-        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS7):
-            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS7}': config.get(INI_IDRAC_KMS_SECTION,
-                                                                                           KMS_REDUNDANTSERVERADDRESS7)})
-        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS8):
-            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS8}': config.get(INI_IDRAC_KMS_SECTION,
-                                                                                           KMS_REDUNDANTSERVERADDRESS8)})
-
-        self.sekm_attributes = {
-            f'SEKM.1.{SEKM_IPADDRESSINCERTIFICATE}': config.get(INI_IDRAC_SEKM_SECTION, SEKM_IPADDRESSINCERTIFICATE),
-            f'SEKM.1.{SEKM_KMSKEYPURGEPOLICY}': config.get(INI_IDRAC_SEKM_SECTION, SEKM_KMSKEYPURGEPOLICY)
-        }
         self.enable_idrac_sekm_attribute = {
-            "SEKM.1.SetState": "Enable"
+            SEKM_SETSTATE: ENABLE
         }
         self.disable_idrac_sekm_attribute = {
-            "SEKM.1.SetState": "Disable"
+            SEKM_SETSTATE: DISABLE
         }
-        self.controllers = config.get(INI_STORAGE_SECTION, STORAGE_SUPPORTED_CONTROLLERS).split(", ")
+
         self.job_id = None
         self.csr_filename = 'sekm.csr'
         self.generated_csr = None
+
+    def __get_job_id_from_accepted_response(self, response):
+        location = response.headers.get('Location')
+        if not location or '/' not in location:
+            print(f'ERROR: unable to locate job ID in JSON headers output {response.headers}')
+            sys.exit(1)
+        return response.headers.get('Location').split("/")[-1]
 
     def request(self, path, request_type="GET", payload=None, success_codes=None, case_info=None, stream=False):
         """
@@ -465,10 +458,9 @@ class IdracFacade:
         :param expected_value:
         :return:
         """
-        attribute_uri = f'{self.idrac_attributes_url}?$select={attribute}'
-        response = self.request(attribute_uri, 'GET', case_info=f'verifying {attribute} has value {expected_value}')
-        data = response.json()
-        current_value = data.get('Attributes').get(attribute, {})
+        f'INFO: Verifying {attribute} has value {expected_value}'
+        current_value = redfish_get_value_for_property(self.idrac_attributes_url, self.username, self.password,
+                                                       property_name=attribute)
         if current_value != expected_value:
             print(
                 f'ERROR: Current value for {attribute} is {current_value}, expected {expected_value}')
@@ -483,8 +475,8 @@ class IdracFacade:
         Set values for the SEKMCert iDRAC attributes
         :return:
         """
-        print(f"INFO: Modifying iDRAC with the SEKM certificate attributes: {self.sekmcert_attributes}")
-        self.request(self.idrac_attributes_url, 'PATCH', payload={'Attributes': self.sekmcert_attributes},
+        print(f"INFO: Modifying iDRAC with the SEKM certificate attributes: {self.config.sekmcert_attributes}")
+        self.request(self.idrac_attributes_url, 'PATCH', payload={'Attributes': self.config.sekmcert_attributes},
                      case_info='modifying SEKM certificate attributes')
         print("INFO: Attributes modified successfully.")
 
@@ -518,8 +510,6 @@ class IdracFacade:
             devnull.write(response.content)
 
         self.generated_csr = response.__dict__['_content'].decode('utf-8')
-        print("Generated CSR Content -")
-        print(self.generated_csr)
         return self.generated_csr
 
     def import_certificate(self, cert_type, file_path):
@@ -543,31 +533,68 @@ class IdracFacade:
         print(f"INFO: Successfully uploaded the SEKM Certificate with type {cert_type} to iDRAC.")
 
     def set_kms_attributes(self):
-        scrubbed_attributes = deepcopy(self.kms_attributes)
+        scrubbed_attributes = deepcopy(self.config.kms_attributes)
         scrubbed_attributes.update({f'KMS.1.{KMS_IDRACPASSWORD}': '********'})
 
         print(f"INFO: Setting iDRAC KMS attributes to {scrubbed_attributes}")
-        self.request(self.idrac_attributes_url, 'PATCH', payload={'Attributes': self.kms_attributes},
+        self.request(self.idrac_attributes_url, 'PATCH', payload={'Attributes': self.config.kms_attributes},
                      case_info='modifying iDRAC KMS attributes')
         print("INFO: Attributes modified successfully.")
 
     def set_sekm_attributes(self):
-        print(f"INFO: Setting iDRAC SEKM attributes to {self.sekm_attributes}")
-        self.request(self.idrac_attributes_url, 'PATCH', payload={'Attributes': self.sekm_attributes},
+        print(f"INFO: Setting iDRAC SEKM attributes to {self.config.sekm_attributes}")
+        self.request(self.idrac_attributes_url, 'PATCH', payload={'Attributes': self.config.sekm_attributes},
                      case_info='modifying iDRAC SEKM attributes')
         print("INFO: Attributes modified successfully.")
 
     def enable_idrac_sekm(self):
-        print("INFO: Enabling SEKM on iDRAC...")
+        print("INFO: Enabling SEKM on iDRAC")
         _ = self.request(self.idrac_attributes_url, 'PATCH',
                          payload={'Attributes': self.enable_idrac_sekm_attribute},
                          case_info='modifying iDRAC SEKM status attribute')
         print(f'INFO: Attribute modified successfully')
         sleep(5)
-        self.verify_idrac_attribute_matches_expected("SEKM.1.SEKMStatus", "Enabled")
+        self.verify_idrac_attribute_matches_expected(SEKM_SEKMSTATUS, ENABLED)
+
+    def enable_idrac_ilkm(self, key_id, key_passphrase):
+        url = f'{self.idrac_card_service_url}/Actions/DelliDRACCardService.EnableiLKM'
+        payload = {'KeyID': key_id, 'Passphrase': key_passphrase}
+        print(f'INFO: Enabling iLKM on iDRAC with key id {key_id}.')
+        response = self.request(url, 'POST', payload=payload, case_info=f'enabling iLKM on iDRAC using key {key_id}',
+                                success_codes=[202])
+        if response.status_code == 202:
+            print(f'INFO: Enable iLKM action submitted successfully')
+            self.job_id = self.__get_job_id_from_accepted_response(response)
+            print(f'INFO: Job ID {self.job_id} successfully created')
+            self.wait_for_job(self.job_id)
+            sleep(5)
+            self.verify_idrac_attribute_matches_expected(SEKM_ILKMSTATUS, ENABLED)
+        else:
+            print(f'ERROR: Did not expect a "response.status_code" status_code in the response')
+            sys.exit(1)
+
+    def set_idrac_autosecure(self, value):
+        autosecure_attribute = {
+            SEKM_AUTOSECURE: value
+        }
+        print(f'INFO: Setting AutoSecure value to "{value}" on iDRAC')
+        _ = self.request(self.idrac_attributes_url, 'PATCH',
+                         payload={'Attributes': autosecure_attribute},
+                         case_info='modifying iDRAC AutoSecure status attribute')
+        print(f'INFO: Attribute modified successfully')
+        sleep(5)
+        self.verify_idrac_attribute_matches_expected(SEKM_AUTOSECURE, value)
+
+    def get_idrac_autosecure(self):
+        return redfish_get_value_for_property(self.idrac_attributes_url, self.username, self.password, SEKM_AUTOSECURE)
+
+    def get_idrac_ilkm(self):
+        return redfish_get_value_for_property(self.idrac_attributes_url, self.username, self.password, SEKM_ILKMSTATUS)
 
     def enable_controller_sekm_and_get_job_id(self, wait_for_job=True):
-        for controller in self.controllers:
+
+        for controller in self.config.controllers:
+
             controller_uri = f'{self.system_url}/Storage/{controller}'
             enable_action = "DellRaidService.EnableControllerEncryption"
             enable_encryption_uri = f'{self.dell_system_url}/DellRaidService/Actions/{enable_action}'
@@ -584,15 +611,12 @@ class IdracFacade:
                                     case_info='enabling controller encryption', success_codes=[202])
             if response.status_code == 202:
                 print(f'INFO: POST command passed to enable controller encryption for controller {controller}')
-                location = response.headers.get('Location')
-                if not location or '/' not in location:
-                    print(f'ERROR: unable to locate job ID in JSON headers output {response.headers}')
-                    sys.exit(1)
-                self.job_id = response.headers.get('Location').split("/")[-1]
+                self.job_id = self.__get_job_id_from_accepted_response(response)
                 print(f'INFO: Job ID {self.job_id} successfully created for storage action "{enable_action}"')
                 if wait_for_job:
                     self.wait_for_job(self.job_id)
-                    self.verify_controller_securitystatus_matches_expected(controller, "SecurityKeyAssigned")
+                    self.verify_controller_securitystatus_matches_expected(controller,
+                                                                           self.config.securitystatus_enabled)
                 return self.job_id
 
     def verify_controller_securitystatus_matches_expected(self, controller, expected_value):
@@ -647,8 +671,84 @@ class IdracFacade:
                 time.sleep(3)
 
 
+class SolutionScriptConfig:
+
+    def __init__(self):
+        config = configparser.ConfigParser()
+        config.read(args["c"])
+
+        self.kmip_attributes = {
+            KMIP_SERVERADDRESS: config.get(INI_KMS_SECTION, KMIP_SERVERADDRESS),
+            KMIP_SERVERUSERNAME: config.get(INI_KMS_SECTION, KMIP_SERVERUSERNAME),
+            KMIP_SERVERPASSWORD: config.get(INI_KMS_SECTION, KMIP_SERVERPASSWORD),
+            KMIP_PORTNUMBER: config.get(INI_KMS_SECTION, KMIP_PORTNUMBER)
+        }
+
+        # For now prepending the XYZ.1. strings so these dicts can be used directly in attributes PATCH requests to iDRAC
+
+        self.sekmcert_attributes = {
+            f'SEKMCert.1.{SEKMCERT_COMMONNAME}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_COMMONNAME),
+            f'SEKMCert.1.{SEKMCERT_COUNTRYCODE}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_COUNTRYCODE),
+            f'SEKMCert.1.{SEKMCERT_EMAILADDRESS}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_EMAILADDRESS),
+            f'SEKMCert.1.{SEKMCERT_LOCALITYNAME}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_LOCALITYNAME),
+            f'SEKMCert.1.{SEKMCERT_ORGANIZATIONNAME}': config.get(INI_IDRAC_SEKMCERT_SECTION,
+                                                                  SEKMCERT_ORGANIZATIONNAME),
+            f'SEKMCert.1.{SEKMCERT_ORGANIZATIONUNIT}': config.get(INI_IDRAC_SEKMCERT_SECTION,
+                                                                  SEKMCERT_ORGANIZATIONUNIT),
+            f'SEKMCert.1.{SEKMCERT_STATENAME}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_STATENAME),
+            f'SEKMCert.1.{SEKMCERT_SUBJECTALTNAME}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_SUBJECTALTNAME),
+            f'SEKMCert.1.{SEKMCERT_USERID}': config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_USERID)
+        }
+
+        self.kms_attributes = {
+            f'KMS.1.{KMS_IDRACUSERNAME}': config.get(INI_IDRAC_KMS_SECTION, KMS_IDRACUSERNAME),
+            f'KMS.1.{KMS_IDRACPASSWORD}': config.get(INI_IDRAC_KMS_SECTION, KMS_IDRACPASSWORD),
+            f'KMS.1.{KMS_KMIPPORTNUMBER}': config.get(INI_IDRAC_KMS_SECTION, KMS_KMIPPORTNUMBER),
+            f'KMS.1.{KMS_PRIMARYSERVERADDRESS}': config.get(INI_IDRAC_KMS_SECTION, KMS_PRIMARYSERVERADDRESS),
+            f'KMS.1.{KMS_REDUNDANTKMIPPORTNUMBER}': config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTKMIPPORTNUMBER),
+            f'KMS.1.{KMS_TIMEOUT}': config.get(INI_IDRAC_KMS_SECTION, KMS_TIMEOUT)}
+
+        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS1):
+            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS1}': config.get(INI_IDRAC_KMS_SECTION,
+                                                                                           KMS_REDUNDANTSERVERADDRESS1)})
+        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS2):
+            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS2}': config.get(INI_IDRAC_KMS_SECTION,
+                                                                                           KMS_REDUNDANTSERVERADDRESS2)})
+        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS3):
+            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS3}': config.get(INI_IDRAC_KMS_SECTION,
+                                                                                           KMS_REDUNDANTSERVERADDRESS3)})
+        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS4):
+            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS4}': config.get(INI_IDRAC_KMS_SECTION,
+                                                                                           KMS_REDUNDANTSERVERADDRESS4)})
+        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS5):
+            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS5}': config.get(INI_IDRAC_KMS_SECTION,
+                                                                                           KMS_REDUNDANTSERVERADDRESS5)})
+        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS6):
+            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS6}': config.get(INI_IDRAC_KMS_SECTION,
+                                                                                           KMS_REDUNDANTSERVERADDRESS6)})
+        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS7):
+            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS7}': config.get(INI_IDRAC_KMS_SECTION,
+                                                                                           KMS_REDUNDANTSERVERADDRESS7)})
+        if config.get(INI_IDRAC_KMS_SECTION, KMS_REDUNDANTSERVERADDRESS8):
+            self.kms_attributes.update({f'KMS.1.{KMS_REDUNDANTSERVERADDRESS8}': config.get(INI_IDRAC_KMS_SECTION,
+                                                                                           KMS_REDUNDANTSERVERADDRESS8)})
+        self.sekm_attributes = {
+            f'SEKM.1.{SEKM_IPADDRESSINCERTIFICATE}': config.get(INI_IDRAC_SEKM_SECTION, SEKM_IPADDRESSINCERTIFICATE),
+            f'SEKM.1.{SEKM_KMSKEYPURGEPOLICY}': config.get(INI_IDRAC_SEKM_SECTION, SEKM_KMSKEYPURGEPOLICY)
+        }
+
+        self.controllers = config.get(INI_STORAGE_SECTION, STORAGE_SUPPORTED_CONTROLLERS).split(", ")
+
+        if solution == 'perc':
+            self.securitystatus_enabled = "SecurityKeyAssigned"
+        elif solution == 'hba':
+            self.securitystatus_enabled = ENABLED
+        else:
+            self.securitystatus_enabled = None
+
+
 parser = argparse.ArgumentParser(
-    description="Python script to configure the complete SEKM Solution with k170v key management server.")
+    description="Python script to enable SEKM and iLKM Solutions")
 parser.add_argument('-ip', help='iDRAC IP address', required=False)
 parser.add_argument('-u', help='iDRAC username', required=False)
 parser.add_argument('-p', help='iDRAC password', required=False)
@@ -658,6 +758,28 @@ parser.add_argument('-g', '--generate-template-ini', dest='generate_ini', action
                     help='Only generate a template ini file and exit', required=False, default=False)
 parser.add_argument('-d', '--debug', dest='debug', action='store_true',
                     help='Increase log verbosity', required=False, default=False)
+parser.add_argument('--enable-autosecure',
+                    help='Use AutoSecure to automatically secure all capable physical disks when enabling solutions',
+                    action='store_true', required=False)
+parser.add_argument('--disable-autosecure',
+                    help='Do not use AutoSecure to automatically secure all capable physical disks when enabling solutions',
+                    action='store_true', required=False)
+parser.add_argument('--ilkm', help='Enable the iLKM solution on the iDRAC device'
+                                   'Cannot be used with --hba-sekm or --perc-sekm options'
+                                   'Requires either --enable-autosecure or --disable-autosecure option'
+                                   'Requires both --ilkm-key-id and --ilkm-key-passphrase options',
+                    action='store_true', default=False, required=False)
+parser.add_argument('--ilkm-key-id', help='The iLKM key id to use for enablement',
+                    default=False, required=False)
+parser.add_argument('--ilkm-key-passphrase', help='The iLKM passphrase to use for enablement',
+                    default=False, required=False)
+parser.add_argument('--hba-sekm', help='Enable the SEKM solution on an HBA devices'
+                                       'Cannot be used with --ilkm or --perc-sekm options'
+                                       'Requires either --enable-autosecure or --disable-autosecure option',
+                    action='store_true', default=False, required=False)
+parser.add_argument('--perc-sekm', help='Enable the SEKM solution on one or more PERC devices'
+                                        'Cannot be used with --ilkm or --hba-sekm options',
+                    action='store_true', default=False, required=False)
 
 args = vars(parser.parse_args())
 
@@ -668,31 +790,65 @@ if args["generate_ini"]:
 idrac_ip = args["ip"]
 idrac_username = args["u"]
 idrac_password = args["p"]
+autosecure = None
+solutions_args = {'ilkm': args.get('ilkm'), 'hba': args.get('hba_sekm'), 'perc': args.get('perc_sekm')}
+autosecure_args = {'enable': args.get('enable_autosecure'), 'disable': args.get('disable_autosecure')}
+ilkm_args = {'k': args.get('ilkm_key_id'), 'p': args.get('ilkm_key_passphrase')}
 
-if not all([idrac_ip, idrac_username, idrac_password]):
+if not all([idrac_ip, idrac_username, idrac_password]) or not any(solutions_args.values()):
     parser.print_usage()
     sys.exit(1)
+elif 1 != len([solution for solution in solutions_args.values() if solution]):
+    print('Only one solution can be specified at a time')
+    sys.exit(1)
 
-config = configparser.ConfigParser()
-config.read(args["c"])
+solution = [arg for arg in solutions_args if solutions_args.get(arg)][0]
+
+if 'perc' not in solution and (not any(autosecure_args.values() or all(autosecure_args.values()))):
+    print(
+        f'One of either --enable-autosecure or --disable-autosecure option is required for the {solution} solution option')
+    sys.exit(1)
+else:
+    autosecure = any([True for arg in autosecure_args if arg == 'enable' and autosecure_args.get('enable')])
+
+if solution == 'ilkm' and not all(ilkm_args.values()):
+    print(f'You must specify both --ilkm-key-id and --ilkm-key-passphrase options for the {solution} solution')
+    sys.exit(1)
+elif solution != 'ilkm' and not args.get('c'):
+    print(f'You must specify a config ini with -c option to use the {solution} solution')
+    sys.exit(1)
 
 if __name__ == "__main__":
-    idrac = IdracFacade()
-    thales_server = ThalesServerFacade()
 
-    # configure key user and certificates
-    kms_user_data = thales_server.create_and_get_user_info(config.get(INI_IDRAC_SEKMCERT_SECTION, SEKMCERT_COMMONNAME))
-    thales_server.add_user_to_key_user_group(kms_user_data)
-    idrac.set_sekmcert_attributes()
-    unsigned_cert = idrac.generate_csr()
-    ca_cert_path = thales_server.get_ca_cert()
-    sleep(10)
-    signed_cert_path = thales_server.get_signed_cert(unsigned_cert)
-    idrac.import_certificate(KMS_SERVER_CA, ca_cert_path)
-    idrac.import_certificate(SEKM_SSL_CERT, signed_cert_path)
+    if solution in ('perc', 'hba'):
+        config = SolutionScriptConfig()
+        idrac = IdracFacade(config)
+        thales_server = ThalesServerFacade(config)
+        # configure key user and certificates
+        kms_user_data = thales_server.create_and_get_user_info(
+            config.sekmcert_attributes.get(f'SEKMCert.1.{SEKMCERT_COMMONNAME}'))
+        thales_server.add_user_to_key_user_group(kms_user_data)
+        idrac.set_sekmcert_attributes()
+        unsigned_cert = idrac.generate_csr()
+        ca_cert_path = thales_server.get_ca_cert()
+        sleep(10)
+        signed_cert_path = thales_server.get_signed_cert(unsigned_cert)
+        idrac.import_certificate(KMS_SERVER_CA, ca_cert_path)
+        idrac.import_certificate(SEKM_SSL_CERT, signed_cert_path)
 
-    # enable sekm on idrac and raid controller
-    idrac.set_kms_attributes()
-    idrac.set_sekm_attributes()
-    idrac.enable_idrac_sekm()
-    _ = idrac.enable_controller_sekm_and_get_job_id()
+        # enable sekm on idrac and raid controller
+        idrac.set_kms_attributes()
+        idrac.set_sekm_attributes()
+        idrac.enable_idrac_sekm()
+    else:
+        idrac = IdracFacade()  # no config file required for ilkm
+
+    if autosecure:
+        idrac.set_idrac_autosecure(ENABLED)
+    elif autosecure is False:
+        idrac.set_idrac_autosecure(DISABLED)
+
+    if solution != 'ilkm':
+        _ = idrac.enable_controller_sekm_and_get_job_id()
+    elif solution == 'ilkm':
+        idrac.enable_idrac_ilkm(args.get('ilkm_key_id'), args.get('ilkm_key_passphrase'))
