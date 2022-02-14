@@ -2,7 +2,7 @@
 
 Dell Secure Enterprise Key Manager (SEKM) python scripts for configuring complete iDRAC SEKM solution. 
 
-## SEKM Overview
+## SEKM (Secure Enterprise Key Manager) Overview
 
 The OpenManage SEKM enables you to use an external Key Management Server (KMS) to manage keys that can then be used by
 iDRAC to lock and unlock storage devices on a Dell EMC PowerEdge server. iDRAC requests the KMS to create a key for each
@@ -23,6 +23,12 @@ The advantages of using SEKM over PERC Local Key Management (LKM) are:
 
 For more information:
 https://dl.dell.com/content/manual6772278-openmanage-secure-enterprise-key-manager-on-poweredge-servers.pdf
+
+## iLKM (iDRAC Local Key Management) Overview
+"iDRAC Local Key Management is a solution for users who do not have plans for Secure Enterprise Key Management (SEKM) 
+currently but would like to secure devices using iDRAC and migrate to SEKM at a later point in time. In this solution, 
+iDRAC will act as a key manager and generate authentication keys that can then be used to secure supported storage devices. 
+Once users decide to move to SEKM they can then migrate from iDRAC based LKM to iDRAC based SEKM solution.
 
 ## Redfish Overview
 
@@ -92,26 +98,35 @@ For details on the DMTF Redfish standard, visit https://www.dmtf.org/standards/r
 ## iDRAC SEKM Scripting Library
 
 This GitHub library contains example Python scripts that illustrate the usage of the iDRAC REST API with Redfish to
-perform the following actions:
+enable the iLKM and SEKM storage security solutions
 
-Configure and enable end to end SEKM solution using Thales k170v server - enable_sekm_solution_k170v.py:
+IdracStorageSecurityManagement.py - Script to enable storage security solutions for iLKM on iDRAC and SEKM on PERC|HBA:
 
-Note: this script currently only supports PERC controller solution
+Overview of running this script for the first time:
+1. Choose one of the solutions to enable PERC, HBA, or iLKM
+2. If using PERC or HBA, generate the template ini Eg. "python3.7 IdracStorageSecurityManagement.py -g"
+   1. Edit this template .ini and fill in the appropriate values for your environment
+3. If using HBA or iLKM solutions, decide whether to have physical disks automatically secured or not when enabling solution
+   1. Script will set the AutoSecure attribute on the iDRAC
+   2. When solution is enabled, the physical disks that support encryption will automatically get secured if AutoSecure is enabled
+4. If using iLKM solution, choose a key id and key passphrase to create the security key with
 
-* Reads required SEKM input values from ini file
-* Creates iDRAC user on Thales server and adds user to Key Users group
-* Configures and generates CSR on iDRAC, gets signed cert back from Thales server
-* Uploads local CA cert and signed cert to iDRAC
-* Enables SEKM on iDRAC
-* Enables SEKM on controllers
-* Steps:
-*        1. Generate the template .ini Eg. "python3.7 enable_sekm_solution_k170v.py -g"
-*        2. Edit the file, Eg. "vim enable_sekm_solution_k170v_template.ini" and add your values
-*        3. Run script Eg. (Linux) "PYTHONUNBUFFERED=1 python3.7 enable_sekm_solution_k170v.py -ip 10.10.10.1 -u idracsuer -p idracpass -c enable_sekm_solution_k170v_template.ini"
-*        Note: Script can take up to 2 hours to complete
-*
+Examples:
+Print detailed usage info:
+*     python3.7 IdracStorageSecurityManagement.py -h
 
-Prerequisites
+Generate a template config ini:
+*     python3.7 IdracStorageSecurityManagement.py -g
+
+Enable PERC SEKM solution with Thales k170v:
+*     python3.7 IdracStorageSecurityManagement.py -ip <idrac ip> -u <idracuser> -p <idracpass> --perc-sekm -c <filename>.ini
+
+Enable HBA SEKM solution with Thales k170v: 
+*     python3.7 IdracStorageSecurityManagement.py -ip <idrac ip> -u <idracuser> -p <idracpass> --hba-sekm -c <filename>.ini
+
+Enable iLKM solution: 
+*     python3.7 IdracStorageSecurityManagement.py -ip <idrac ip> -u <idracuser> -p <idracpass> --ilkm --ilkm-key-id <Key Id> --ilkm-key-passphrase <Key Passphrase>
+    
 
 * PowerEdge 14G/15G servers
 * Minimum iDRAC9 FW 4.00.00.00 with SEKM License
