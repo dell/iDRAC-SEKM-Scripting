@@ -688,6 +688,19 @@ class IdracFacade:
                 print(f'INFO: JobStatus not completed, current status: "{message}", job state "{job_state}"')
                 time.sleep(3)
 
+    def test_sekm_server_connection(self, index=1, type="Primary"):
+        '''
+
+        :param index:
+        :param type:
+        :return:
+        '''
+        url = f'{self.idrac_card_service_url}/Actions/DelliDRACCardService.TestSEKMServerConnection'
+        payload = {'ServerIndex': index, 'ServerType': type}
+        print(f'INFO: Testing KMS server connection to {type} server')
+        _ = self.request(url, 'POST', payload=payload, case_info=f'testing connection to KMS {index}')
+        print(f'INFO: Server connection test is successful')
+
 
 class SolutionScriptConfig:
 
@@ -788,9 +801,9 @@ parser.add_argument('--ilkm', help='Enable the iLKM solution on the iDRAC device
                                    'Requires both --ilkm-key-id and --ilkm-key-passphrase options',
                     action='store_true', default=False, required=False)
 parser.add_argument('--ilkm-to-sekm', help='Transition the iLKM solution on the iDRAC device over to SEKM'
-                                   'Cannot be used with other solution options'
-                                   'Requires either --enable-autosecure or --disable-autosecure option'
-                                   'Requires both --ilkm-key-id and --ilkm-key-passphrase options',
+                                           'Cannot be used with other solution options'
+                                           'Requires either --enable-autosecure or --disable-autosecure option'
+                                           'Requires both --ilkm-key-id and --ilkm-key-passphrase options',
                     action='store_true', default=False, required=False)
 parser.add_argument('--ilkm-key-id', help='The iLKM key id to use for enablement or transition to SEKM',
                     default=False, required=False)
@@ -803,6 +816,13 @@ parser.add_argument('--hba-sekm', help='Enable the SEKM solution on an HBA devic
 parser.add_argument('--perc-sekm', help='Enable the SEKM solution on one or more PERC devices'
                                         'Cannot be used with other solution options',
                     action='store_true', default=False, required=False)
+parser.add_argument('--idrac-sekm', help='Enable the SEKM solution on just the iDRAC (no controllers)'
+                                         'Cannot be used with other solution options',
+                    action='store_true', default=False, required=False)
+parser.add_argument('--certs-only',
+                    help='Optional parameter for perc-sekm and hba-sekm solutions.  Configure iDRAC certs with '
+                         'the remote KMS only and exit without enabling SEKM on iDRAC or PERC.',
+                    action='store_true', default=False, required=False)
 
 args = vars(parser.parse_args())
 
@@ -813,9 +833,8 @@ if args["generate_ini"]:
 idrac_ip = args["ip"]
 idrac_username = args["u"]
 idrac_password = args["p"]
-autosecure = None
 solutions_args = {'ilkm': args.get('ilkm'), 'hba': args.get('hba_sekm'), 'perc': args.get('perc_sekm'),
-                  'ilkm_to_sekm': args.get('ilkm_to_sekm')}
+                  'ilkm_to_sekm': args.get('ilkm_to_sekm'), 'idrac': args.get('idrac_sekm')}
 autosecure_args = {'enable': args.get('enable_autosecure'), 'disable': args.get('disable_autosecure')}
 ilkm_args = {'k': args.get('ilkm_key_id'), 'p': args.get('ilkm_key_passphrase')}
 
@@ -828,7 +847,9 @@ elif 1 != len([solution for solution in solutions_args.values() if solution]):
 
 solution = [arg for arg in solutions_args if solutions_args.get(arg)][0]
 
-if 'perc' not in solution and (not any(autosecure_args.values() or all(autosecure_args.values()))):
+if 'perc' in solution:
+    autosecure = None
+elif not args.get('certs_only') and (not any(autosecure_args.values() or all(autosecure_args.values()))):
     print(
         f'One of either --enable-autosecure or --disable-autosecure option is required for the {solution} solution option')
     sys.exit(1)
@@ -844,7 +865,7 @@ elif solution != 'ilkm' and not args.get('c'):
 
 if __name__ == "__main__":
 
-    if solution in ('perc', 'hba', 'ilkm_to_sekm'):
+    if solution in ('perc', 'hba', 'ilkm_to_sekm', 'idrac'):
         config = SolutionScriptConfig()
         idrac = IdracFacade(config)
         thales_server = ThalesServerFacade(config)
@@ -863,6 +884,10 @@ if __name__ == "__main__":
         # enable sekm on idrac and raid controller
         idrac.set_kms_attributes()
         idrac.set_sekm_attributes()
+        idrac.test_sekm_server_connection()
+        print(f'The SEKM certificates are now configured with the KMS server')
+        if args.get('certs_only'):
+            sys.exit(0)
     else:
         idrac = IdracFacade()  # no config file required for ilkm
 
@@ -870,14 +895,16 @@ if __name__ == "__main__":
         idrac.set_idrac_autosecure(ENABLED)
     elif autosecure is False:
         idrac.set_idrac_autosecure(DISABLED)
-    print(f'INFO: Initial setup is complete, the {solution} solution will be applied now')
 
-    if solution in ('perc', 'hba'):
+    if 'ilkm' not in solution:
         idrac.enable_idrac_sekm()
-        _ = idrac.enable_controller_sekm_and_get_job_id()
     elif solution == 'ilkm':
         idrac.enable_idrac_ilkm(args.get('ilkm_key_id'), args.get('ilkm_key_passphrase'))
     elif solution == 'ilkm_to_sekm':
         idrac.ilkm_to_sekm(args.get('ilkm_key_id'), args.get('ilkm_key_passphrase'))
+        idrac.test_sekm_server_connection()
     else:
         print(f'ERROR: Cannot handle solution value "{solution}". This is a script error.')
+
+    if solution in ('perc', 'hba'):
+        _ = idrac.enable_controller_sekm_and_get_job_id()
