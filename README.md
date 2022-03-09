@@ -103,13 +103,13 @@ enable the iLKM and SEKM storage security solutions
 IdracStorageSecurityManagement.py - Script to enable storage security solutions for iLKM on iDRAC and SEKM on PERC|HBA:
 
 Overview of running this script for the first time:
-1. Choose one of the solutions to enable PERC, HBA, or iLKM
-2. If using PERC or HBA, generate the template ini Eg. "python3.7 IdracStorageSecurityManagement.py -g"
+1. Choose one of the solutions to enable PERC SEKM, HBA SEKM, iDRAC SEKM, iLKM, or perform iLKM to iDRAC SEKM transition
+2. For solutions PERC SEKM, HBA SEKM, or iDRAC SEKM: Generate the template ini Eg. "python3.7 IdracStorageSecurityManagement.py -g"
    1. Edit this template .ini and fill in the appropriate values for your environment
-3. If using HBA or iLKM solutions, decide whether to have physical disks automatically secured or not when enabling solution
+3. For solutions HBA SEKM, iDRAC SEKM, or iLKM: Decide whether to have physical disks automatically secured or not when enabling solution
    1. Script will set the AutoSecure attribute on the iDRAC
    2. When solution is enabled, the physical disks that support encryption will automatically get secured if AutoSecure is enabled
-4. If using iLKM solution, choose a key id and key passphrase to create the security key with
+4. For iLKM and iLKM to SEKM transition solutions: Choose a key id and key passphrase to create the security key with
 
 Examples:
 Print detailed usage info:
@@ -119,19 +119,24 @@ Generate a template config ini:
 *     python3.7 IdracStorageSecurityManagement.py -g
 
 Enable PERC SEKM solution with Thales k170v:
-*     python3.7 IdracStorageSecurityManagement.py -ip <idrac ip> -u <idracuser> -p <idracpass> --perc-sekm -c <filename>.ini
+*     python3.7 IdracStorageSecurityManagement.py -ip <idrac ip> -u <idrac user> -p <idrac pass> --perc-sekm -c <filename>.ini
 
 Enable HBA SEKM solution with Thales k170v: 
-*     python3.7 IdracStorageSecurityManagement.py -ip <idrac ip> -u <idracuser> -p <idracpass> --hba-sekm -c <filename>.ini
+*     python3.7 IdracStorageSecurityManagement.py -ip <idrac ip> -u <idrac user> -p <idrac pass> --hba-sekm -c <filename>.ini
+
+Enable iDRAC SEKM solution: 
+*     python3.7 IdracStorageSecurityManagement.py -ip <idrac ip> -u <idrac user> -p <idrac pass> --idrac-sekm -c <filename>.ini
 
 Enable iLKM solution: 
-*     python3.7 IdracStorageSecurityManagement.py -ip <idrac ip> -u <idracuser> -p <idracpass> --ilkm --ilkm-key-id <Key Id> --ilkm-key-passphrase <Key Passphrase>
-    
+*     python3.7 IdracStorageSecurityManagement.py -ip <idrac ip> -u <idrac user> -p <idrac pass> --ilkm --ilkm-key-id <key id> --ilkm-key-passphrase <key passphrase>
+
+Transition iLKM to SEKM solution: 
+*     python3.7 IdracStorageSecurityManagement.py --ilkm-to-sekm --enable-autosecure -ip <idrac ip> -u <idrac user> -p <idrac pass> -c <filename>.ini --ilkm-key-id <key id> --ilkm-key-passphrase <key passphrase>
 
 * PowerEdge 14G/15G servers
 * Minimum iDRAC9 FW 4.00.00.00 with SEKM License
 * Python 3.x
-* Thales Server k170v
+* Thales Server k170v (Not required for iLKM)
 
 ## Support
 
