@@ -425,6 +425,8 @@ class IdracFacade:
         self.csr_filename = 'sekm.csr'
         self.generated_csr = None
 
+        self.verify_idrac_attribute_matches_expected(SEKM_SEKMSTATUS, DISABLED)
+
     def __get_job_id_from_accepted_response(self, response):
         location = response.headers.get('Location')
         if not location or '/' not in location:
